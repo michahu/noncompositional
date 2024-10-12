@@ -121,7 +121,9 @@ def init_inner_state(model_name, lr, T, warmup_steps):
     Default initialization for inner state
     """
     config = AutoConfig.from_pretrained(model_name)
-    inner_model = AutoModelForCausalLM(config)
+    inner_model = AutoModelForCausalLM(
+        config, attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16
+    )
     optimizer, scheduler = create_optimizer_scheduler(
         inner_model,
         lr,

@@ -1,5 +1,5 @@
 import numpy as np
-from datasets import load_from_disk, concatenate_datasets
+from datasets import load_dataset, concatenate_datasets
 
 
 class AbstractDataset:
@@ -39,9 +39,12 @@ class AbstractDataset:
 class MixingDataset(AbstractDataset):
     """Loads several HuggingFace datasets. Constructs a mix depending on the set proportion per round."""
 
-    def __init__(self, logger, tokenizer, seed, sample_rule, is_eval, data_path):
+    def __init__(
+        self, logger, tokenizer, seed, sample_rule, is_eval, data_path, seq_length=256
+    ):
         super().__init__(logger, tokenizer, seed, sample_rule, is_eval, data_path)
-        self.data = load_from_disk(self.data_path)
+        self.data = load_dataset("json", data_files={data_path})["train"]
+        self.seq_length = seq_length
 
     def set_skills(self):
         self.skills = sorted(self.data.unique("slice"))

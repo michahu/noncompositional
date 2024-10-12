@@ -1,6 +1,6 @@
 import os
 import torch
-import pd
+import pandas as pd
 import pickle
 from collections import defaultdict
 

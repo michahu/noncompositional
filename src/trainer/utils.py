@@ -3,8 +3,7 @@ import numpy as np
 import wandb
 
 import torch
-
-from chimera.dataset import get_train_dataloader
+from torch.utils.data import DataLoader
 
 
 def make_state_vectors(results):
@@ -17,100 +16,40 @@ def make_state_vectors(results):
         ]
 
 
-def unroll_lm(
-    fabric,
-    args,
-    tokenizer,
-    weights,
-    train_data_generator,
-    inner_states,
-    K,
-    max_grad_norm=1.0,
-):
-    """
-    This function is for iterable datasets, which scales better to large pretraining corpora.
-    """
-    for weight, state in zip(weights, inner_states):
-        weight = weight.squeeze(0).numpy()
-        train_data_generator.set_proportions(args, weight)
-
-        tokenized_train = get_tokenized_train_dataset(
-            args, train_data_generator, K * args.bsz
-        )
-        train_dataloader = fabric.setup_dataloaders(
-            get_train_dataloader(tokenizer, tokenized_train, args.bsz)
-        )
-        train_dataloader = iter(train_dataloader)
-
-        (inner_model, optimizer, lr_scheduler, t) = state
-        for _ in range(K):
-            batch = next(train_dataloader)
-            # for val in batch['domain_id']:
-            #     empirical_counts[val] += 1
-            input_ids, attention_mask, labels = (
-                batch["input_ids"],
-                batch["attention_mask"],
-                batch["labels"],
-            )
-            is_accumulating = t % args.gradient_accumulation_steps != 0
-            with fabric.no_backward_sync(inner_model, enabled=is_accumulating):
-                output = inner_model(
-                    input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels,
-                    # **batch
-                )
-                fabric.backward(output.loss)
-                # fabric.print(output.loss.item())
-            if not is_accumulating:
-                fabric.clip_gradients(inner_model, optimizer, max_grad_norm)
-                optimizer.step()
-                optimizer.zero_grad()
-                lr_scheduler.step()
-                t += 1
-
-        state = (inner_model, optimizer, lr_scheduler, t)
-
-    wandb.log({"inner_loss": output.loss.item()})
-    fabric.print(f"Inner loss sample: {output.loss.item()}")
-
-
 def unroll(
-    fabric,
-    args,
     tokenizer,
     weights,
     train_data_generator,
     inner_states,
     K,
-    val_samples=None,
+    bsz,
     max_grad_norm=1.0,
 ):
-    """
-    This function is generally used in synthetic experiments, where we can create a batch of data
-    of the correct length on the fly.
-
-    TODO: add a running loss to replace the results computation
-    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     for i, (weight, state) in enumerate(zip(weights, inner_states)):
         inner_model, optimizer, lr_scheduler, t = state
-        # detach if weight is a tensor
+        inner_model.to(device)
+
         if torch.is_tensor(weight):
             weight = weight.squeeze(0).detach().cpu().numpy()
-        train_data_generator.set_proportions(args, weight)
-        tokenized_train = get_tokenized_train_dataset(
-            args, train_data_generator, K * args.bsz, all_samples=val_samples
+        train_data_generator.set_proportions(weight)
+        tokenized_train = train_data_generator.get_tokenized_dataset(K * bsz)
+
+        train_dataloader = DataLoader(
+            tokenized_train,
+            batch_size=bsz,
+            shuffle=True,
+            collate_fn=lambda x: tokenizer.pad(x, return_tensors="pt", padding=True),
         )
-        train_dataloader = get_train_dataloader(tokenizer, tokenized_train, args.bsz)
-        train_dataloader = fabric.setup_dataloaders(train_dataloader)
 
         for batch in train_dataloader:
             inner_model.train()
+            batch = {k: v.to(device) for k, v in batch.items()}
             outputs = inner_model(**batch)
             loss = outputs.loss
-            fabric.backward(loss.mean())
-            fabric.clip_gradients(inner_model, optimizer, max_grad_norm)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(inner_model.parameters(), max_grad_norm)
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
@@ -133,20 +72,6 @@ def cos_schedule(
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
-
-
-def get_tokenized_train_dataset(args, train_dataset, n_data, all_samples=None):
-    if args.task_name in ["lego", "addition"]:
-        tokenized_train = train_dataset.get_tokenized_dataset(
-            n_data, all_samples=all_samples, include_skill_idxs=args.curriculum
-        )
-    elif args.task_name == "ni":
-        tokenized_train = train_dataset.get_tokenized_dataset()
-    elif args.task_name == "cookbook":
-        tokenized_train, _ = train_dataset.get_tokenized_dataset(n_data, all_samples)
-    else:
-        tokenized_train = train_dataset.get_tokenized_dataset(n_data)
-    return tokenized_train
 
 
 def get_steps(args, n_epochs=None):

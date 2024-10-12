@@ -6,7 +6,7 @@ from tqdm import tqdm
 import wandb
 
 from .meta_trainer import MetaTrainer
-from .utils import unroll, unroll_lm, make_state_vectors
+from .utils import unroll, make_state_vectors
 
 
 def sample_noise(outer_model, sigma):
@@ -60,10 +60,8 @@ class PESTrainer(MetaTrainer):
 
     def metatrain(
         self,
-        fabric,
         train_data_generator,
         validation_data,
-        filter_samples=None,
         output_idxs=None,
     ):
         """
@@ -77,7 +75,6 @@ class PESTrainer(MetaTrainer):
 
         progress_bar = tqdm(
             range(self.args.max_steps),
-            disable=(not fabric.global_rank == 0),
         )
         for step in range(self.args.max_steps):
             if step % self.args.save_every == 0 and step > 0:
@@ -87,12 +84,10 @@ class PESTrainer(MetaTrainer):
                 )
 
             results = self.grad(
-                fabric,
                 results,
                 train_data_generator,
                 validation_data,
                 step,
-                filter_samples=filter_samples,
                 output_idxs=output_idxs,
             )
 
@@ -111,28 +106,23 @@ class PESTrainer(MetaTrainer):
                         output_idxs=output_idxs,
                     )
 
-            if fabric.global_rank == 0:
-                progress_bar.update(1)
+            progress_bar.update(1)
 
         self.outer_state.save(self.evaluator.result_path, f"final_{self.args.seed}")
 
         # Meta-evaluation
         self.train(
-            fabric,
             train_data_generator,
             validation_data,
-            filter_samples=filter_samples,
             output_idxs=output_idxs,
         )
 
     def grad(
         self,
-        fabric,
         results,
         train_data,
         validation_data,
         outer_step,
-        filter_samples=None,
         output_idxs=None,
         return_weights=False,
     ):
@@ -151,27 +141,14 @@ class PESTrainer(MetaTrainer):
             self.args.outer_model == "fixed",
         )
 
-        if self.train_is_iterable:
-            unroll_lm(
-                fabric,
-                self.args,
-                self.tokenizer,
-                weights,
-                train_data,
-                self.inner_states.particles,
-                self.args.K,
-            )
-        else:
-            unroll(
-                fabric,
-                self.args,
-                self.tokenizer,
-                weights,
-                train_data,
-                self.inner_states.particles,
-                self.args.K,
-                val_samples=filter_samples,
-            )
+        unroll(
+            self.tokenizer,
+            weights,
+            train_data,
+            self.inner_states.particles,
+            self.args.K,
+            self.bsz,
+        )
         # results  = [self.inner_states.evaluate(p, self.evaluator, validation_data, outer_step, output_idxs=output_idxs) for p in self.inner_states.particles]
 
         if self.args.val_task_name == "blimp":

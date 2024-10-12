@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from .utils import unroll, unroll_lm, make_state_vectors
+from .utils import unroll, make_state_vectors
 
 
 class OuterState:
@@ -56,6 +56,7 @@ class MetaTrainer:
         num_particles,
         T,
         K,
+        bsz,
         max_steps,
         save_every,
         train_is_iterable=False,
@@ -73,6 +74,7 @@ class MetaTrainer:
         assert T % K == 0  # otherwise your effective T will be longer than requested.
         self.T = T
         self.K = K
+        self.bsz = bsz
         self.max_steps = max_steps
         self.save_every = save_every
 
@@ -81,7 +83,6 @@ class MetaTrainer:
         fabric,
         train_data,
         validation_data,  # sometimes used to decontaminate the training dataset
-        filter_samples=None,
         output_idxs=None,
     ):
         """
@@ -101,24 +102,15 @@ class MetaTrainer:
             with torch.inference_mode():
                 state_vector = make_state_vectors(self.args, [results])
                 weights = [self.outer_state.model(state_vector[0].unsqueeze(0))]
-            if self.train_is_iterable:
-                unroll_lm(
-                    self.tokenizer,
-                    weights,
-                    train_data,
-                    [inner_state],
-                    step,
-                    self.K,
-                )
-            else:
-                unroll(
-                    self.tokenizer,
-                    weights,
-                    train_data,
-                    [inner_state],
-                    self.K,
-                    val_samples=filter_samples,
-                )
+
+            unroll(
+                self.tokenizer,
+                weights,
+                train_data,
+                [inner_state],
+                self.K,
+                self.bsz,
+            )
             results = self.inner_states.evaluate(
                 inner_state,
                 self.evaluator,
@@ -140,7 +132,6 @@ class MetaTrainer:
         validation_data,
         output_dir_path,
         train_dataloader=None,
-        filter_samples=None,
         output_idxs=None,
         lockstep=True,
     ):

@@ -6,8 +6,6 @@ import fire
 import torch
 import warnings
 
-import lightning as L
-
 from src.dataset import MixingDataset
 from src.evaluator import HFEvaluator
 from src.trainer.pes_trainer import PESTrainer
@@ -24,7 +22,8 @@ def get_dataset(logger, tokenizer, seed, is_eval, data_path):
 def main(
     seed,
     model_name,
-    data_path,
+    train_path,
+    val_path,
     output_dir,
     lr,
     T,
@@ -58,9 +57,9 @@ def main(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
 
-    train_data = get_dataset(logger, tokenizer, seed, False, data_path)
+    train_data = get_dataset(logger, tokenizer, seed, False, train_path)
     validation_data = get_dataset(
-        logger, tokenizer, seed, True, data_path
+        logger, tokenizer, seed, True, val_path
     ).get_tokenized_dataset()
 
     # setup to construct meta trainer
