@@ -1,4 +1,6 @@
 import numpy as np
+import torch
+
 from datasets import load_dataset, concatenate_datasets
 
 
@@ -8,25 +10,27 @@ class AbstractDataset:
     """
 
     def __init__(
-        self, args, logger, tokenizer, seed, sample_rule, is_eval, data_path=None
+        self,
+        logger,
+        tokenizer,
+        seed,
+        sample_rule,
+        is_eval,
+        data_path=None,
+        seq_length=256,
     ):
         self.tokenizer = tokenizer
         self.logger = logger
-        self.seq_length = args.seq_length
+        self.seq_length = seq_length
         self.sample_rule = sample_rule
         self.is_eval = is_eval
         self.data_path = data_path
         self.seed = seed
 
-    def set_skills(self, args):
-        """Sets the support of skills over which we are sampling from by processing args.slice_list."""
-        pass
-
-    def set_proportions(self, args, proportions):
+    def set_proportions(self, proportions):
         """Sets the proportions with which to sample each skill.
 
         Arguments:
-        - args: args.graph is used (exp sum of weights) if proportions are not provided.
         - proportions: a list of values (not necessarily adding up to 1) that determine how frequently to sample each skill. This is used to update the skills mixture before and during training.
         """
         pass
@@ -36,19 +40,46 @@ class AbstractDataset:
         pass
 
 
-class MixingDataset(AbstractDataset):
+class MixingDatasetCOGS(AbstractDataset):
     """Loads several HuggingFace datasets. Constructs a mix depending on the set proportion per round."""
 
     def __init__(
-        self, logger, tokenizer, seed, sample_rule, is_eval, data_path, seq_length=256
+        self,
+        logger,
+        tokenizer,
+        seed,
+        sample_rule,
+        is_eval,
+        data_path,
+        seq_length=256,
+        skills=None,
+        add_skill_idx=False,
     ):
-        super().__init__(logger, tokenizer, seed, sample_rule, is_eval, data_path)
+        super().__init__(
+            logger,
+            tokenizer,
+            seed,
+            sample_rule,
+            is_eval,
+            data_path,
+            seq_length=seq_length,
+        )
         self.data = load_dataset("json", data_files={data_path})["train"]
-        self.seq_length = seq_length
 
-    def set_skills(self):
-        self.skills = sorted(self.data.unique("slice"))
-        self.k = len(self.skills)
+        self.add_skill_idx = add_skill_idx
+
+        if not self.is_eval:
+            # eval only has one skill (COGS)
+            all_skills = sorted(self.data.unique("skill"))
+            if skills is None:
+                skills = all_skills
+            else:
+                for skill in skills:
+                    if skill not in all_skills:
+                        raise ValueError(f"Skill {skill} not found in the dataset")
+                self.skills = skills
+
+            self.k = len(self.skills)
 
     def set_proportions(self, proportions):
         if self.sample_rule == "mixture":
@@ -65,7 +96,7 @@ class MixingDataset(AbstractDataset):
                 data_per_skill.append(
                     len(
                         self.data.filter(
-                            lambda x: x == s, input_columns="slice", num_proc=14
+                            lambda x: x == s, input_columns="skill", num_proc=14
                         )
                     )
                 )
@@ -74,14 +105,27 @@ class MixingDataset(AbstractDataset):
 
     def _tokenize(self, x):
         tokenized = self.tokenizer(
-            x["text"],
+            x["translation"]["en"] + " " + x["translation"]["mentalese"],
             truncation=True,
             max_length=self.seq_length,
             padding="max_length",
             return_tensors="pt",
         )
-        tokenized["input_ids"] = tokenized["input_ids"][0]
-        tokenized["attention_mask"] = tokenized["attention_mask"][0]
+        if self.add_skill_idx:
+            if self.is_eval:
+                skill_id = 0  # we only eval on COGS, the other tasks are dummy/metamer training tasks
+            else:
+                skill_id = x["skill"]
+            tokenized["input_ids"] = torch.cat(
+                [torch.tensor([skill_id]), tokenized["input_ids"][:-1]], dim=0
+            )
+            tokenized.attention_mask = torch.cat(
+                [torch.tensor([1]), tokenized["attention_mask"][:-1]], dim=0
+            )
+        else:
+            tokenized["input_ids"] = tokenized["input_ids"][0]
+            tokenized["attention_mask"] = tokenized["attention_mask"][0]
+
         return tokenized
 
     def get_tokenized_dataset(self, n_data=None):
@@ -94,7 +138,7 @@ class MixingDataset(AbstractDataset):
         return (
             self.data.map(
                 lambda x: self._tokenize(x),
-                batched=True,
+                # doesn't support batched=True (yet)
             ),
         )
 
@@ -106,11 +150,11 @@ class MixingDataset(AbstractDataset):
         all_data = []
         for i, s in enumerate(self.skills):
             skill_data = self.data.filter(
-                lambda x: x == s, input_columns="slice", num_proc=8
+                lambda x: x == s, input_columns="skill", num_proc=8
             )
             if len(skill_data) < n_per_skill[i]:
                 self.logger.warning(
-                    f"Not enough samples in slice {s}. size is {len(skill_data)}, requested is {n_per_skill[i]}"
+                    f"Not enough samples in skill {s}. size is {len(skill_data)}, requested is {n_per_skill[i]}"
                 )
 
             n = min(n_per_skill[i], len(skill_data))

@@ -30,20 +30,25 @@ def save_weights(weights, result_path, seed, counter):
 
 class Evaluator:
     def __init__(
-        self, logger, tokenizer, seed, output_dir_path, evaluate_accuracy=None
+        self,
+        logger,
+        tokenizer,
+        seed,
+        output_dir_path,
+        bsz=64,
+        eval_batches=None,
+        evaluate_accuracy=False,
     ):
+        """
+        eval_batches: the number of batches to evaluate on. If None, we evaluate on the entire dataset.
+        """
         self.logger = logger
         self.tokenizer = tokenizer
         self.seed = seed
         self.output_dir_path = output_dir_path
-        if evaluate_accuracy is not None:
-            self.evaluate_accuracy = evaluate_accuracy
-        else:
-            self.evaluate_accuracy = self.args.evaluate_accuracy
-
-        self.bsz = (
-            self.args.eval_bsz if self.args.eval_bsz is not None else self.args.bsz
-        )
+        self.evaluate_accuracy = evaluate_accuracy
+        self.bsz = bsz
+        self.eval_batches = eval_batches
 
     def evaluate(self, model, tokenized_data, counter, weights, output_idxs, train):
         """Evaluates the model on a given dataset by computing and saving the loss per sample.
@@ -81,7 +86,7 @@ class HFEvaluator(Evaluator):
         for i, test_dataloader in enumerate(data):
             running_loss = 0
             for j, batch in enumerate(test_dataloader):
-                if j == self.args.eval_batches:
+                if j == self.eval_batches:
                     break
                 input_ids, attention_mask, labels = (
                     batch["input_ids"],
@@ -94,9 +99,7 @@ class HFEvaluator(Evaluator):
                 loss = output.loss
                 running_loss += loss.item()
 
-            loss_dict[i] = running_loss / min(
-                len(test_dataloader), self.args.eval_batches
-            )
+            loss_dict[i] = running_loss / min(len(test_dataloader), self.eval_batches)
 
         # self.fabric.print(loss_dict.values())
 

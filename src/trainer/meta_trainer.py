@@ -54,9 +54,11 @@ class MetaTrainer:
         inner_init_fn,
         outer_init_fn,
         num_particles,
+        seed,
         T,
         K,
         bsz,
+        sigma,
         max_steps,
         save_every,
         train_is_iterable=False,
@@ -68,6 +70,7 @@ class MetaTrainer:
         # reset inner and outer model
         self.outer_state = OuterState(outer_init_fn)
         self.inner_states = InnerStateBuffer(evaluator, num_particles, inner_init_fn)
+        self.seed = seed
 
         self.train_is_iterable = train_is_iterable
 
@@ -75,6 +78,7 @@ class MetaTrainer:
         self.T = T
         self.K = K
         self.bsz = bsz
+        self.sigma = sigma
         self.max_steps = max_steps
         self.save_every = save_every
 
@@ -100,7 +104,7 @@ class MetaTrainer:
         )
         for step in range(0, self.T, self.K):
             with torch.inference_mode():
-                state_vector = make_state_vectors(self.args, [results])
+                state_vector = make_state_vectors([results])
                 weights = [self.outer_state.model(state_vector[0].unsqueeze(0))]
 
             unroll(

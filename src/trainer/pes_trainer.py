@@ -22,7 +22,7 @@ def sample_noise(outer_model, sigma):
 class PESTrainer(MetaTrainer):
     @staticmethod
     @torch.inference_mode()
-    def get_pes_weights(N, sigma, outer_model, state_vectors, is_fixed=False):
+    def get_pes_weights(N, sigma, outer_model, state_vectors):
         """
         sampling weights for current outer step
         """
@@ -35,22 +35,14 @@ class PESTrainer(MetaTrainer):
             for p, n in zip(outer_model.parameters(), pos):
                 p.data += n
 
-            if is_fixed:
-                distr = F.softmax(outer_model.weight.data)
-                weights.append(distr.squeeze(0))
-            else:
-                weights.append(outer_model(state_vectors[i].unsqueeze(0)))
+            weights.append(outer_model(state_vectors[i].unsqueeze(0)))
 
             outer_model.load_state_dict(old_dict)
 
             for p, n in zip(outer_model.parameters(), neg):
                 p.data += n
 
-            if is_fixed:
-                distr = F.softmax(outer_model.weight.data)
-                weights.append(distr.squeeze(0))
-            else:
-                weights.append(outer_model(state_vectors[i + 1].unsqueeze(0)))
+            weights.append(outer_model(state_vectors[i + 1].unsqueeze(0)))
 
             outer_model.load_state_dict(old_dict)
             perts.append(pos)
@@ -74,14 +66,12 @@ class PESTrainer(MetaTrainer):
         results = None
 
         progress_bar = tqdm(
-            range(self.args.max_steps),
+            range(self.max_steps),
         )
-        for step in range(self.args.max_steps):
-            if step % self.args.save_every == 0 and step > 0:
+        for step in range(self.max_steps):
+            if step % self.save_every == 0 and step > 0:
                 # reset
-                self.outer_state.save(
-                    self.evaluator.result_path, f"{step}_{self.args.seed}"
-                )
+                self.outer_state.save(self.evaluator.result_path, f"{step}_{self.seed}")
 
             results = self.grad(
                 results,
@@ -108,7 +98,7 @@ class PESTrainer(MetaTrainer):
 
             progress_bar.update(1)
 
-        self.outer_state.save(self.evaluator.result_path, f"final_{self.args.seed}")
+        self.outer_state.save(self.evaluator.result_path, f"final_{self.seed}")
 
         # Meta-evaluation
         self.train(
@@ -129,16 +119,15 @@ class PESTrainer(MetaTrainer):
         """
         Computes the ES-Single gradient.
         """
-        N = self.args.num_particles
+        N = self.num_particles
 
-        state_vectors = make_state_vectors(self.args, results)
+        state_vectors = make_state_vectors(results)
         # fabric.print(self.outer_state.model.weight.data)
         weights, perts = self.get_pes_weights(
             N,
-            self.args.sigma,
+            self.sigma,
             self.outer_state.model,
             state_vectors,
-            self.args.outer_model == "fixed",
         )
 
         unroll(
@@ -146,20 +135,17 @@ class PESTrainer(MetaTrainer):
             weights,
             train_data,
             self.inner_states.particles,
-            self.args.K,
+            self.K,
             self.bsz,
         )
         # results  = [self.inner_states.evaluate(p, self.evaluator, validation_data, outer_step, output_idxs=output_idxs) for p in self.inner_states.particles]
 
-        if self.args.val_task_name == "blimp":
-            objs = [1 - res["accuracy"].to_numpy().mean() for res in results]
-        else:
-            objs = [res["task_loss"].to_numpy().mean() for res in results]
+        objs = [res["task_loss"].to_numpy().mean() for res in results]
 
         grads = []
         for layer in zip(*perts):
             stacked = torch.stack([l * o for l, o in zip(layer, objs)])
-            grads.append(stacked.mean(dim=0) / (N * self.args.sigma**2))
+            grads.append(stacked.mean(dim=0) / (N * self.sigma**2))
 
         for p, n in zip(self.outer_state.model.parameters(), grads):
             p.grad = n

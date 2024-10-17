@@ -6,17 +6,11 @@ import fire
 import torch
 import warnings
 
-from src.dataset import MixingDataset
+from src.dataset import MixingDatasetCOGS
 from src.evaluator import HFEvaluator
 from src.trainer.pes_trainer import PESTrainer
 
 from utils import get_logger, make_output_dir, init_inner_state, init_outer_state
-
-
-def get_dataset(logger, tokenizer, seed, is_eval, data_path):
-    return MixingDataset(
-        logger, tokenizer, seed, sample_rule="mixture", is_eval=is_eval
-    )
 
 
 def main(
@@ -27,14 +21,19 @@ def main(
     output_dir,
     lr,
     T,
+    K,
+    bsz,
     warmup_steps,
     input_dim,
     output_dim,
     meta_lr,
     meta_steps,
+    sigma=0.1,
+    seq_length=128,
     num_particles=4,
     run_type="meta",
     do_breakstep=False,
+    skills=None,
 ):
     output_dir_path = make_output_dir(output_dir)
     logger = get_logger(output_dir_path)
@@ -57,17 +56,32 @@ def main(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
 
-    train_data = get_dataset(logger, tokenizer, seed, False, train_path)
-    validation_data = get_dataset(
-        logger, tokenizer, seed, True, val_path
+    train_data = MixingDatasetCOGS(
+        logger,
+        tokenizer,
+        seed,
+        data_path=train_path,
+        sample_rule="mixture",
+        is_eval=False,
+        seq_length=seq_length,
+        skills=skills,
+    )
+    validation_data = MixingDatasetCOGS(
+        logger,
+        tokenizer,
+        seed,
+        data_path=val_path,
+        sample_rule="mixture",
+        is_eval=True,
+        seq_length=seq_length,
+        skills=skills,
     ).get_tokenized_dataset()
 
     # setup to construct meta trainer
     inner_init_fn = lambda: init_inner_state(model_name, lr, T, warmup_steps)
     outer_init_fn = lambda: init_outer_state(input_dim, output_dim, meta_lr, meta_steps)
 
-    # evaluator also saves current args to file
-    evaluator = HFEvaluator(logger, tokenizer, seed, output_dir_path)
+    evaluator = HFEvaluator(logger, tokenizer, seed, output_dir_path, bsz=bsz * 2)
 
     trainer = PESTrainer(
         logger,
@@ -75,6 +89,14 @@ def main(
         evaluator,
         inner_init_fn,
         outer_init_fn,
+        num_particles,
+        seed,
+        T,
+        K,
+        bsz,
+        sigma=sigma,
+        max_steps=meta_steps,
+        save_every=100,
     )
 
     if do_breakstep:
@@ -96,7 +118,6 @@ def main(
                 t + step_increase,
             )
 
-    # args.run_type is different from args.alg because meta algs also implement trainer.train()
     if run_type == "meta":
         trainer.metatrain(
             train_data,

@@ -72,30 +72,3 @@ def cos_schedule(
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
-
-
-def get_steps(args, n_epochs=None):
-    """Computes the number of steps per checkpoint and the total number of training steps."""
-    if n_epochs is None:
-        n_epochs = args.n_epochs
-    ckpt_steps = (
-        int((args.n_select * n_epochs / args.bsz) / args.num_ckpts)
-        if args.max_steps == -1
-        else int(args.max_steps * n_epochs / args.num_ckpts)
-    )
-
-    total_steps = (
-        args.max_steps * n_epochs
-        if args.max_steps != -1
-        else int(n_epochs * args.n_select / args.bsz)
-    )
-    print(f"Total steps: {total_steps} Steps per checkpoint: {ckpt_steps}")
-
-    return ckpt_steps, total_steps
-
-
-def get_update_steps(args, total_steps):
-    """Computes the number of samples per update and the number of total updates (e.g., number of rounds T)."""
-    update_size = args.update_steps * args.bsz
-    n_updates = total_steps / args.update_steps
-    return update_size, n_updates
