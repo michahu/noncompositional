@@ -34,9 +34,7 @@ class InnerStateBuffer:
     @staticmethod
     def evaluate(particle, evaluator, validation_data, t, output_idxs=None, save=False):
         model, _, _, _ = particle
-        return evaluator.evaluate(
-            model, validation_data, t, weights=None, output_idxs=output_idxs, save=save
-        )
+        return evaluator.evaluate(model, validation_data, t, weights=None, save=save)
 
     def reset(self) -> list:
         """
@@ -70,6 +68,7 @@ class MetaTrainer:
         # reset inner and outer model
         self.outer_state = OuterState(outer_init_fn)
         self.inner_states = InnerStateBuffer(evaluator, num_particles, inner_init_fn)
+        self.num_particles = num_particles
         self.seed = seed
 
         self.train_is_iterable = train_is_iterable
@@ -84,9 +83,9 @@ class MetaTrainer:
 
     def train(
         self,
-        fabric,
         train_data,
-        validation_data,  # sometimes used to decontaminate the training dataset
+        validation_data,
+        proportions=None,
         output_idxs=None,
     ):
         """
@@ -94,18 +93,22 @@ class MetaTrainer:
             Iterable datasets rely on the train_dataset_pointer to change the mixing distribution in the inner loop.
         """
         inner_state = self.inner_states.init_fn()
-        results = self.inner_states.evaluate(
-            inner_state, self.evaluator, validation_data, 0, output_idxs=output_idxs
-        )
+        results = None
 
-        progress_bar = tqdm(
-            range(int(self.T / self.K)),
-            disable=(not fabric.global_rank == 0),
-        )
+        if proportions is not None:
+            assert len(proportions) == self.outer_state.model.input_dim
+            weights = [torch.tensor(proportions, dtype=torch.float32)]
+        else:
+            weights = [torch.ones(1, self.outer_state.model.input_dim)]
+
+        progress_bar = tqdm(range(int(self.T / self.K)))
         for step in range(0, self.T, self.K):
-            with torch.inference_mode():
-                state_vector = make_state_vectors([results])
-                weights = [self.outer_state.model(state_vector[0].unsqueeze(0))]
+            if proportions is None:
+                with torch.inference_mode():
+                    state_vector = make_state_vectors(
+                        [results], 1, self.outer_state.model.input_dim
+                    )
+                    weights = [self.outer_state.model(state_vector[0].unsqueeze(0))]
 
             unroll(
                 self.tokenizer,
@@ -115,7 +118,7 @@ class MetaTrainer:
                 self.K,
                 self.bsz,
             )
-            results = self.inner_states.evaluate(
+            self.inner_states.evaluate(
                 inner_state,
                 self.evaluator,
                 validation_data,
@@ -124,14 +127,12 @@ class MetaTrainer:
                 save=True,
             )
 
-            if fabric.global_rank == 0:
-                progress_bar.update(1)
+            progress_bar.update(1)
 
         return inner_state
 
     def metatrain(
         self,
-        fabric,
         train_data,
         validation_data,
         output_dir_path,

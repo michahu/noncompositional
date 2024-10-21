@@ -96,7 +96,7 @@ class MixingDatasetCOGS(AbstractDataset):
                 data_per_skill.append(
                     len(
                         self.data.filter(
-                            lambda x: x == s, input_columns="skill", num_proc=14
+                            lambda x: x == s, input_columns="skill", num_proc=8
                         )
                     )
                 )
@@ -117,14 +117,16 @@ class MixingDatasetCOGS(AbstractDataset):
             else:
                 skill_id = x["skill"]
             tokenized["input_ids"] = torch.cat(
-                [torch.tensor([skill_id]), tokenized["input_ids"][:-1]], dim=0
+                [torch.tensor([skill_id]), tokenized["input_ids"][0][:-1]], dim=0
             )
             tokenized.attention_mask = torch.cat(
-                [torch.tensor([1]), tokenized["attention_mask"][:-1]], dim=0
+                [torch.tensor([1]), tokenized["attention_mask"][0][:-1]], dim=0
             )
         else:
             tokenized["input_ids"] = tokenized["input_ids"][0]
             tokenized["attention_mask"] = tokenized["attention_mask"][0]
+
+        tokenized["labels"] = tokenized["input_ids"].clone()
 
         return tokenized
 
@@ -135,11 +137,11 @@ class MixingDatasetCOGS(AbstractDataset):
             return self._get_tokenized_train(n_data)
 
     def _get_tokenized_val(self):
-        return (
-            self.data.map(
-                lambda x: self._tokenize(x),
-                # doesn't support batched=True (yet)
-            ),
+        return self.data.map(
+            lambda x: self._tokenize(x),
+            # doesn't support batched=True (yet)
+            remove_columns=self.data.column_names,
+            cache_file_name=None,
         )
 
     def _get_tokenized_train(self, n_data):
@@ -152,6 +154,7 @@ class MixingDatasetCOGS(AbstractDataset):
             skill_data = self.data.filter(
                 lambda x: x == s, input_columns="skill", num_proc=8
             )
+            print(len(skill_data), n_per_skill[i])
             if len(skill_data) < n_per_skill[i]:
                 self.logger.warning(
                     f"Not enough samples in skill {s}. size is {len(skill_data)}, requested is {n_per_skill[i]}"
@@ -163,9 +166,9 @@ class MixingDatasetCOGS(AbstractDataset):
             )
             all_data.append(skill_data.select(sample_idxs))
 
-        self.data = concatenate_datasets(all_data).shuffle()
-        return self.data.map(
+        data_subset = concatenate_datasets(all_data).shuffle()
+        return data_subset.map(
             lambda x: self._tokenize(x),
-            batched=True,
+            # batched=True,
             remove_columns=self.data.column_names,
         )

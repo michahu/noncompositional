@@ -6,10 +6,11 @@ import torch
 from torch.utils.data import DataLoader
 
 
-def make_state_vectors(results):
+def make_state_vectors(results, N, output_dim):
     if results is None:
-        return [np.array([0.0, 0.0])]
+        return [torch.zeros(output_dim) for _ in range(N)]
     else:
+        assert len(results) == N
         return [
             torch.tensor(res["task_loss"].to_numpy(), dtype=torch.float32)
             for res in results

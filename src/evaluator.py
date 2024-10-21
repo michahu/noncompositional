@@ -75,33 +75,32 @@ class Evaluator:
 
 class HFEvaluator(Evaluator):
     @torch.inference_mode()
-    def evaluate(self, model, data, counter, weights, save=False):
+    def evaluate(self, model, dataloader, counter, weights, save=False):
         """
-        output_idxs is here just for API consistency. This particular evaluator does not use output_idxs.
         This evaluator computes the eval loss.
         """
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         model.eval()
         loss_dict = defaultdict(list)
 
-        for i, test_dataloader in enumerate(data):
-            running_loss = 0
-            for j, batch in enumerate(test_dataloader):
-                if j == self.eval_batches:
-                    break
-                input_ids, attention_mask, labels = (
-                    batch["input_ids"],
-                    batch["attention_mask"],
-                    batch["labels"],
-                )
-                output = model(
-                    input_ids=input_ids, attention_mask=attention_mask, labels=labels
-                )
-                loss = output.loss
-                running_loss += loss.item()
+        # use commented out pattern for multiple eval tasks
+        # for i, test_dataloader in enumerate(data):
+        #     running_loss = 0
 
-            loss_dict[i] = running_loss / min(len(test_dataloader), self.eval_batches)
+        running_loss = 0
+        for j, batch in enumerate(dataloader):
+            if j == self.eval_batches:
+                break
+            batch = {k: v.to(device) for k, v in batch.items()}
+            outputs = model(**batch)
+            loss = outputs.loss
+            running_loss += loss.item()
 
-        # self.fabric.print(loss_dict.values())
+        if self.eval_batches is not None:
+            loss_dict[0] = running_loss / min(len(dataloader), self.eval_batches)
+        else:
+            loss_dict[0] = running_loss / len(dataloader)
 
         result_df = pd.DataFrame.from_dict(
             loss_dict, orient="index", columns=["task_loss"]

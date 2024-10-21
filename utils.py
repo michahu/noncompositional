@@ -14,6 +14,8 @@ from torch.optim import AdamW
 class MLP(nn.Module):
     def __init__(self, input_dim, output_dim, use_softmax=True):
         super(MLP, self).__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
         self.fc1 = nn.Linear(input_dim, 32)
         self.fc2 = nn.Linear(32, output_dim)
         self.use_softmax = use_softmax
@@ -120,10 +122,13 @@ def init_inner_state(model_name, lr, T, warmup_steps):
     """
     Default initialization for inner state
     """
-    config = AutoConfig.from_pretrained(model_name)
-    inner_model = AutoModelForCausalLM(
-        config, attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16
+    config = AutoConfig.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        attn_implementation="flash_attention_2",
+        torch_dtype=torch.bfloat16,
     )
+    inner_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
     optimizer, scheduler = create_optimizer_scheduler(
         inner_model,
         lr,

@@ -101,7 +101,7 @@ class PESTrainer(MetaTrainer):
         self.outer_state.save(self.evaluator.result_path, f"final_{self.seed}")
 
         # Meta-evaluation
-        self.train(
+        return self.train(
             train_data_generator,
             validation_data,
             output_idxs=output_idxs,
@@ -121,7 +121,7 @@ class PESTrainer(MetaTrainer):
         """
         N = self.num_particles
 
-        state_vectors = make_state_vectors(results)
+        state_vectors = make_state_vectors(results, N, self.outer_state.model.input_dim)
         # fabric.print(self.outer_state.model.weight.data)
         weights, perts = self.get_pes_weights(
             N,
@@ -130,7 +130,7 @@ class PESTrainer(MetaTrainer):
             state_vectors,
         )
 
-        unroll(
+        loss_totals = unroll(
             self.tokenizer,
             weights,
             train_data,
@@ -138,7 +138,12 @@ class PESTrainer(MetaTrainer):
             self.K,
             self.bsz,
         )
-        # results  = [self.inner_states.evaluate(p, self.evaluator, validation_data, outer_step, output_idxs=output_idxs) for p in self.inner_states.particles]
+        results = [
+            self.inner_states.evaluate(
+                p, self.evaluator, validation_data, outer_step, w
+            )
+            for p, w in zip(self.inner_states.particles, weights)
+        ]
 
         objs = [res["task_loss"].to_numpy().mean() for res in results]
 
@@ -151,5 +156,5 @@ class PESTrainer(MetaTrainer):
             p.grad = n
 
         if return_weights:
-            return results, weights
-        return results
+            return loss_totals, weights
+        return loss_totals

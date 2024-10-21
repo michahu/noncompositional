@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --time=47:59:59
 #SBATCH --mem=64GB
-#SBATCH --gres=gpu:1 -C "a100|h100"
+#SBATCH --gres=gpu:1
 #SBATCH --job-name=es
 #SBATCH --mail-type=BEGIN
 #SBATCH --mail-user=myh2014@nyu.edu
